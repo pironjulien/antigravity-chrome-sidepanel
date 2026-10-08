@@ -1,0 +1,8 @@
+{
+  "description": "Explicit Chrome extension origins allowed to open the local WebSocket bridge",
+  "allowed_origins": [
+    "chrome-extension://ljgneacjmkmiopjfacahdpcigiofnngo/",
+    "chrome-extension://bmoppmncalloednpbnkkaikbehponacg/",
+    "chrome-extension://imicfnbdjlkndfcbopfpalpdcepbiobo/"
+  ]
+}

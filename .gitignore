@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Credentials & Local Tokens
+*.token
+*token*.txt
+.env
+.env.local
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

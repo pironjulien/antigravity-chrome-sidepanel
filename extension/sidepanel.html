@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity</title>
+    <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+    <div class="gemini-panel-root">
+        <!-- Barre supérieure ultra-discrète (Style Gemini) -->
+        <header class="gemini-top-bar">
+            <div class="gemini-brand">
+                <svg class="gemini-mini-sparkle" width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-sparkle-grad)"/>
+                </svg>
+                <span class="gemini-brand-name">Antigravity</span>
+                <span id="bridge-status-indicator" class="gemini-status-dot online" title="Pont local connecté"></span>
+            </div>
+            <div class="gemini-top-actions">
+                <button id="btn-options" class="gemini-icon-btn" title="Options">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.5"></circle>
+                        <circle cx="12" cy="12" r="1.5"></circle>
+                        <circle cx="12" cy="19" r="1.5"></circle>
+                    </svg>
+                </button>
+                <button id="btn-close-panel" class="gemini-icon-btn" title="Fermer le panneau">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="6"></line>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Menu déroulant des options -->
+        <div id="options-dropdown-menu" class="gemini-floating-menu" style="display:none;">
+            <div class="menu-item" id="opt-reload-tab">🔄 Recharger l'onglet actif</div>
+            <div class="menu-item" id="opt-ping-bridge">⚡ Tester le pont local (127.0.0.1)</div>
+            <div class="menu-item" id="opt-open-extensions">🧩 Gérer les extensions</div>
+            <div class="menu-divider"></div>
+            <div class="menu-item" id="opt-clear-chat">🗑️ Effacer la conversation</div>
+        </div>
+
+        <!-- Définition commune du dégradé Gemini -->
+        <svg width="0" height="0" style="position: absolute;">
+            <defs>
+                <linearGradient id="gemini-sparkle-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#4285F4" />
+                    <stop offset="35%" stop-color="#9B72CB" />
+                    <stop offset="70%" stop-color="#D96570" />
+                    <stop offset="100%" stop-color="#FBBC04" />
+                </linearGradient>
+            </defs>
+        </svg>
+
+        <!-- Corps principal (Fil Gemini) -->
+        <main class="gemini-scroll-area" id="feed-container">
+            <!-- État d'accueil Gemini (quand aucun message) -->
+            <div class="gemini-hero-container" id="welcome-box">
+                <div class="gemini-sparkle-large-wrap">
+                    <svg class="gemini-sparkle-large" width="40" height="40" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-sparkle-grad)"/>
+                    </svg>
+                </div>
+                <h1 class="gemini-hero-title">Posez vos questions, Julien !</h1>
+            </div>
+
+            <!-- Messages de conversation -->
+            <div class="gemini-messages" id="feed-messages"></div>
+        </main>
+
+        <!-- Zone inférieure flottante : suggestions + conteneur de saisie Gemini -->
+        <div class="gemini-bottom-dock">
+            <!-- Pilules de suggestions alignées en bas à gauche -->
+            <div class="gemini-suggestions-stack" id="suggestions-stack">
+                <button class="gemini-pill-btn" data-action="map">Cartographier les boutons cliquables</button>
+                <button class="gemini-pill-btn" data-action="inspect">Inspecter les champs du formulaire</button>
+                <button class="gemini-pill-btn" data-action="cookies">Extraire les cookies de session</button>
+                <button class="gemini-pill-btn" data-action="screenshot">Capturer la vue actuelle</button>
+            </div>
+
+            <!-- Menu flottant de sélection d'onglets (quand on clique sur + ou tape @) -->
+            <div id="tabs-dropdown-menu" class="gemini-floating-menu" style="display:none;">
+                <div class="menu-header">Ajouter un onglet au contexte</div>
+                <div id="tabs-dropdown-list" class="tabs-list-wrapper"></div>
+            </div>
+
+            <!-- Menu flottant de sélection de modèle -->
+            <div id="model-dropdown-menu" class="gemini-floating-menu" style="display:none;">
+                <div class="menu-item active" data-model="auto">✓ AGY 2.0 • Auto (Routage Intelligent)</div>
+                <div class="menu-item" data-model="flash">AGY 2.0 • Flash Extended (Rapide)</div>
+                <div class="menu-item" data-model="pro">AGY 2.0 • Pro Reasoning (Raisonnement poussé)</div>
+                <div class="menu-item" data-model="direct">AGY 2.0 • SOTA Direct (CDP + Actions directes)</div>
+            </div>
+
+            <!-- Boîte de saisie Gemini Card -->
+            <div class="gemini-input-card">
+                <!-- Ligne 1 : Chip de contexte d'onglet (ex: ⓘ Accueil / X ✕) -->
+                <div class="gemini-context-row" id="gemini-context-row">
+                    <div class="gemini-tab-chip" id="tab-context-chip">
+                        <span class="tab-chip-icon">ⓘ</span>
+                        <span class="tab-chip-title" id="tab-chip-title">Chargement...</span>
+                        <button class="tab-chip-close" id="btn-detach-tab" title="Détacher l'onglet">✕</button>
+                    </div>
+                </div>
+
+                <!-- Ligne 2 : Zone de saisie texte (Pleine largeur sans coupure) -->
+                <div class="gemini-input-row">
+                    <button id="btn-add-context" class="gemini-add-btn" title="Ajouter des onglets (@)">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                    </button>
+                    <textarea id="prompt-input" rows="1" placeholder="Saisissez @ pour ajouter des onglets ou une instruction..."></textarea>
+                </div>
+
+                <!-- Ligne 3 : Contrôles inférieurs (Sélecteur de modèle + Micro/Envoi) -->
+                <div class="gemini-bottom-controls-row">
+                    <div class="gemini-controls-spacer"></div>
+                    <div class="gemini-controls-right">
+                        <div class="gemini-model-badge" id="btn-model-selector" title="Changer de modèle">
+                            <span id="model-name-label">AGY 2.0 • Auto</span>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </div>
+                        <button id="btn-send" class="gemini-action-btn" title="Dicter ou Envoyer">
+                            <!-- Icône micro/audio par défaut, flèche bleue à la saisie -->
+                            <svg class="icon-mic" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                            </svg>
+                            <svg class="icon-send" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;">
+                                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Toast -->
+        <div id="gemini-toast" class="gemini-toast"></div>
+    </div>
+
+    <script src="sidepanel.js"></script>
+</body>
+</html>
