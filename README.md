@@ -21,6 +21,7 @@ Conçu pour égaler et surpasser les meilleures intégrations Browser Use de **C
 | **Ancrage visuel (Grounding)** | Vision brute approximative (pixels) | **Arbre d'accessibilité (`axtree`) + Set-of-Marks (SoM) avec badges `[#1]`, `[#2]` dynamiques** |
 | **Protocole sous-jacent** | Capture d'écran OS complète | **Chrome DevTools Protocol (CDP) direct via WebSocket local sécurisé (`127.0.0.1:9224`)** |
 | **Gestion multi-onglets** | Limitée ou inexistante | **Contrôle total : `list_tabs`, `select_tab`, `new_tab`, `close_tab`, sélecteur rapide `@`** |
+| **Isolation Concurrente & Arrière-Plan** | Vole le focus ou bloque l'utilisateur | **Exécution 100% en arrière-plan (`active: false`) sans vol de focus + Groupes d'onglets Chrome "Antigravity"** |
 | **Extraction de données** | Scraping texte simple | **Dumps d'arbre DOM structuré, console logs en temps réel, cookies de session et export PDF vectoriel** |
 | **Interface & Ergonomie** | Boîte noire sans interface | **Panneau latéral natif Chrome MV3 calqué sur Google Gemini (`#131314`), dictée vocale et mode Auto** |
 
@@ -56,6 +57,12 @@ Conçu pour égaler et surpasser les meilleures intégrations Browser Use de **C
 - **Dictée vocale native** : Microphone interactif Web Speech API avec pulsation et retranscription en temps réel.
 - **Mode `AGY 2.0 • Auto`** : Routage automatique de chaque invite entre modèle SOTA direct, raisonnement approfondi Pro ou vitesse Flash.
 
+### 6. 🛡️ Isolation Concurrente en Arrière-Plan & Groupes d'Onglets ("Antigravity")
+- **Non-interférence totale (Travail Parallèle Indépendant)** : Antigravity ouvre par défaut ses onglets de travail en arrière-plan (`active: false`). L'utilisateur continue de naviguer, rédiger et travailler dans ses propres onglets sans aucun vol de focus ni basculement intempestif.
+- **Ciblage persistant de l'agent (`lastAgentTabId`)** : Toutes les commandes de l'agent s'exécutent de façon déterministe sur l'onglet d'arrière-plan sans jamais toucher à l'onglet actif de l'utilisateur.
+- **Groupes d'Onglets Chrome Natifs (`chrome.tabGroups`)** : Tous les onglets créés par l'agent sont automatiquement réunis dans un groupe Chrome dédié violet intitulé **« Antigravity »**, isolés des onglets personnels et repliables d'un simple clic.
+- **Status Pill Non-Intrusive** : Pilule translucide discrète `⚡ Antigravity · [Action]` affichée en bas à droite de l'onglet piloté, transparente aux clics (`pointer-events: none`) et à impact CPU strictement nul (0 ms de latence).
+
 ---
 
 ## 🏛️ Architecture Technique
@@ -64,7 +71,7 @@ Conçu pour égaler et surpasser les meilleures intégrations Browser Use de **C
 flowchart LR
     subgraph Antigravity["Google Antigravity & AI Agents"]
         Agent["Agent IA / LLM\n(Gemini 2.5 / Flash)"]
-        MCP["MCP Tools Client\n(15+ outils Browser)"]
+        MCP["MCP Tools Client\n(32 outils Browser)"]
     end
 
     subgraph Bridge["Pont Local Sécurisé (Python 3.10+)"]
@@ -93,24 +100,36 @@ flowchart LR
 
 ## 🛠️ Catalogue d'Outils pour Agents (Outils MCP / API)
 
-L'agent Antigravity dispose d'une palette complète d'outils pour piloter Chrome :
+L'agent Antigravity dispose d'une palette complète de 32 outils pour piloter Chrome :
 
 | Outil | Description |
 | :--- | :--- |
-| `browser_navigate(url)` | Ouvre ou redirige l'onglet actif vers une URL. |
-| `browser_click(selector, index)` | Clique avec précision sur un élément CSS ou un marqueur SoM `[#N]`. |
-| `browser_fill(selector, text)` | Remplit un champ de formulaire ou un input avec émission d'événements. |
+| `browser_new_tab(url, background=True, group="Antigravity")` | Ouvre un onglet en arrière-plan sans voler le focus et le regroupe dans Antigravity. |
+| `browser_group_tabs(tab_ids, title, color)` | Regroupe des onglets Chrome dans un groupe nommé et coloré (`chrome.tabGroups`). |
+| `browser_interactive_map(viewport_only=True)` | Cartographie condensée des éléments interactifs avec badges SoM `[#N]` (économie de 85% à 95% de tokens). |
+| `browser_navigate(url)` | Ouvre ou redirige l'onglet actif ou cible vers une URL. |
+| `browser_click(selector, mark)` | Clique avec précision Playwright-grade et effet laser sur sélecteur ou marqueur SoM `[#N]`. |
+| `browser_fill(selector, text, mark)` | Remplissage réactif de formulaire (React, Next.js, contenteditable). |
+| `browser_hover(selector, mark)` | Survole un élément pour révéler menus déroulants et infobulles. |
 | `browser_press_key(key)` | Simule l'appui d'une touche (`Enter`, `Tab`, `ArrowDown`, etc.). |
 | `browser_select_option(selector, value)` | Sélectionne une valeur dans un menu déroulant `<select>`. |
-| `browser_hover(selector)` | Survole un élément pour déclencher les interactions CSS/JS. |
-| `browser_scroll(direction, amount)` | Fait défiler la page (`up`, `down`, `top`, `bottom`). |
-| `browser_screenshot(format)` | Capture l'affichage de l'onglet actif sous format WebP/PNG compact. |
+| `browser_drag_and_drop(from_mark, to_mark)` | Glisser-déposer fluide multi-étapes via CDP. |
+| `browser_wait_load()` | Attend la stabilisation complète du document DOM. |
+| `browser_wait_network_idle()` | Attend que toutes les requêtes Fetch/XHR soient terminées. |
+| `browser_upload(files, selector)` | Téléversement direct de fichiers sans boîte de dialogue OS bloquante. |
+| `browser_scroll(direction, y)` | Fait défiler la page (`up`, `down`, pixels). |
+| `browser_screenshot(format, mark)` | Capture de l'onglet ou d'un élément précis sous format WebP/PNG compact (< 200 Ko). |
 | `browser_content()` | Extrait le DOM ou le texte brut nettoyé de la page active. |
 | `browser_axtree()` | Récupère l'arbre d'accessibilité hiérarchique pour le raisonnement IA. |
-| `browser_list_tabs()` | Liste tous les onglets ouverts avec IDs, URLs et titres. |
-| `browser_select_tab(tab_id)` | Bascule l'action de l'agent sur un onglet spécifique. |
+| `browser_list_tabs()` | Liste tous les onglets ouverts avec IDs, URLs, titres et `groupId`. |
+| `browser_active_tab()` | Obtient les métadonnées de l'onglet actif. |
+| `browser_select_tab(tab_id)` | Bascule l'action et le premier plan sur un onglet spécifique. |
+| `browser_close_tab(tab_id)` | Ferme l'onglet spécifié ou l'onglet de travail d'arrière-plan. |
+| `browser_reload(bypass_cache)` | Recharge la page de l'onglet actif ou cible. |
 | `browser_eval(script)` | Exécute une expression JavaScript dans le contexte de la page. |
-| `browser_get_cookies()` | Lit les cookies de la session pour la persistance d'authentification. |
+| `browser_get_cookies(urls)` | Lit les cookies de session pour la persistance d'authentification. |
+| `browser_check_handoff()` | Détecte de façon proactive les challenges 2FA, OTP ou CAPTCHA. |
+| `browser_cdp_send(method, params)` | Envoi de commande Chrome DevTools Protocol brute directe. |
 | `browser_logs()` | Récupère les logs de la console DevTools de la page. |
 
 ---

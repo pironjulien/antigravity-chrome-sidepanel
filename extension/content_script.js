@@ -1,6 +1,6 @@
 /**
  * Antigravity Visual Feedback & Set-of-Mark (SoM) Grounding Overlay
- * Manifest V3 Content Script for NexusAGY Browser Bridge (v1.9.0)
+ * Manifest V3 Content Script for NexusAGY Browser Bridge (v2.0.0)
  */
 
 // 0. Proactive Background Service Worker Wakeup on Page Load (Top window only)
@@ -118,3 +118,89 @@ window.addEventListener("__antigravity_clear_som", () => {
         window.__antigravity_som_elements.clear();
     }
 });
+
+// 3. Lightweight Non-Intrusive Agent Status Pill
+let __antigravity_pill_timer = null;
+
+window.addEventListener("__antigravity_status_pill", (e) => {
+    const detail = e.detail || {};
+    let pill = document.getElementById("__antigravity_status_pill");
+
+    if (detail.remove) {
+        if (pill) {
+            pill.style.opacity = "0";
+            pill.style.transform = "translateY(8px)";
+            setTimeout(() => { if (pill?.parentNode) pill.parentNode.removeChild(pill); }, 300);
+        }
+        return;
+    }
+
+    const text = detail.text || "En tâche de fond";
+    if (!pill) {
+        pill = document.createElement("div");
+        pill.id = "__antigravity_status_pill";
+        pill.style.position = "fixed";
+        pill.style.bottom = "16px";
+        pill.style.right = "16px";
+        pill.style.zIndex = "2147483647";
+        pill.style.display = "flex";
+        pill.style.alignItems = "center";
+        pill.style.gap = "8px";
+        pill.style.padding = "6px 14px";
+        pill.style.background = "rgba(19, 19, 20, 0.92)";
+        pill.style.backdropFilter = "blur(12px)";
+        pill.style.webkitBackdropFilter = "blur(12px)";
+        pill.style.border = "1px solid rgba(168, 85, 247, 0.45)";
+        pill.style.borderRadius = "9999px";
+        pill.style.boxShadow = "0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(168, 85, 247, 0.35)";
+        pill.style.color = "#f1f5f9";
+        pill.style.fontFamily = "system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+        pill.style.fontSize = "12px";
+        pill.style.fontWeight = "500";
+        pill.style.pointerEvents = "none";
+        pill.style.userSelect = "none";
+        pill.style.opacity = "0";
+        pill.style.transform = "translateY(8px)";
+        pill.style.transition = "opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)";
+
+        const dot = document.createElement("span");
+        dot.className = "__antigravity_pill_dot";
+        dot.style.width = "8px";
+        dot.style.height = "8px";
+        dot.style.borderRadius = "50%";
+        dot.style.backgroundColor = "#a855f7";
+        dot.style.boxShadow = "0 0 8px #c084fc";
+        dot.style.display = "inline-block";
+
+        const label = document.createElement("span");
+        label.className = "__antigravity_pill_text";
+
+        pill.appendChild(dot);
+        pill.appendChild(label);
+        document.documentElement.appendChild(pill);
+
+        requestAnimationFrame(() => {
+            pill.style.opacity = "1";
+            pill.style.transform = "translateY(0)";
+        });
+    }
+
+    const label = pill.querySelector(".__antigravity_pill_text");
+    if (label) label.textContent = `⚡ Antigravity · ${text}`;
+
+    pill.style.opacity = "1";
+    pill.style.transform = "translateY(0)";
+
+    if (__antigravity_pill_timer) clearTimeout(__antigravity_pill_timer);
+    const autoHideMs = detail.autoHideMs !== undefined ? detail.autoHideMs : 3500;
+    if (autoHideMs > 0) {
+        __antigravity_pill_timer = setTimeout(() => {
+            if (pill) {
+                pill.style.opacity = "0";
+                pill.style.transform = "translateY(8px)";
+                setTimeout(() => { if (pill?.parentNode) pill.parentNode.removeChild(pill); }, 300);
+            }
+        }, autoHideMs);
+    }
+});
+

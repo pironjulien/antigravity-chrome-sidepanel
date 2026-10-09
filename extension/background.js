@@ -6,6 +6,7 @@
 let attachedDebuggers = new Set();
 let tabConsoleLogs = new Map();
 let tabInFlightRequests = new Map();
+let lastAgentTabId = null;
 
 console.log("[NexusAGY] Background Service Worker (v2.0.0) active.");
 
@@ -16,6 +17,7 @@ const BRIDGE_WS_URL = "ws://127.0.0.1:9224";
 let bridgeWs = null;
 let reconnectTimer = null;
 let keepaliveInterval = null;
+let reconnectAttempts = 0;
 
 function connectBridgeWS() {
     if (typeof WebSocket === "undefined") return;
@@ -32,6 +34,7 @@ function connectBridgeWS() {
 
         bridgeWs.onopen = () => {
             console.log("[NexusAGY] Service Worker connected directly to " + BRIDGE_WS_URL);
+            reconnectAttempts = 0;
             if (reconnectTimer) {
                 clearTimeout(reconnectTimer);
                 reconnectTimer = null;
@@ -69,7 +72,7 @@ function connectBridgeWS() {
                 clearInterval(keepaliveInterval);
                 keepaliveInterval = null;
             }
-            scheduleBridgeReconnect(2000);
+            scheduleBridgeReconnect();
         };
 
         bridgeWs.onerror = () => {
@@ -77,12 +80,16 @@ function connectBridgeWS() {
         };
     } catch (e) {
         bridgeWs = null;
-        scheduleBridgeReconnect(3000);
+        scheduleBridgeReconnect();
     }
 }
 
-function scheduleBridgeReconnect(delayMs = 2000) {
+function scheduleBridgeReconnect(overrideDelayMs = null) {
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    const delayMs = overrideDelayMs !== null
+        ? overrideDelayMs
+        : Math.min(30000, Math.round(1500 * Math.pow(1.618, Math.min(reconnectAttempts, 6))));
+    reconnectAttempts++;
     reconnectTimer = setTimeout(connectBridgeWS, delayMs);
 }
 
@@ -111,8 +118,8 @@ if (typeof chrome !== "undefined") {
             }
         });
     }
-    if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(connectBridgeWS);
-    if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(connectBridgeWS);
+    if (chrome.runtime?.onStartup) chrome.runtime.onStartup.addListener(() => setTimeout(connectBridgeWS, 300));
+    if (chrome.runtime?.onInstalled) chrome.runtime.onInstalled.addListener(() => setTimeout(connectBridgeWS, 300));
     if (chrome.alarms?.create) {
         chrome.alarms.create("bridge_keepalive_alarm", { periodInMinutes: 1 });
         chrome.alarms.onAlarm.addListener(() => {
@@ -153,7 +160,7 @@ if (typeof chrome !== "undefined") {
     }
 }
 
-connectBridgeWS();
+setTimeout(connectBridgeWS, 300);
 
 // -----------------------------------------------------------------------------
 // CDP Event Monitor (Console logs, Dialogs, FileChooser & Network In-flight)
@@ -216,6 +223,7 @@ chrome.debugger.onDetach.addListener((source) => {
 
 if (chrome.tabs?.onRemoved?.addListener) {
     chrome.tabs.onRemoved.addListener((tabId) => {
+        if (tabId === lastAgentTabId) lastAgentTabId = null;
         attachedDebuggers.delete(tabId);
         tabConsoleLogs.delete(tabId);
         tabInFlightRequests.delete(tabId);
@@ -278,6 +286,10 @@ async function routeCommand(req) {
             case "create_tab":
             case "new_tab":
                 return await createTab(params);
+
+            case "group_tabs":
+            case "tabs_group":
+                return await groupTabs(params);
 
             case "close_tab":
                 return await closeTab(params);
@@ -398,7 +410,7 @@ async function routeCommand(req) {
 
             case "reload_extension":
                 setTimeout(() => { try { chrome.runtime.reload(); } catch(e) {} }, 100);
-                return { data: { reloading: true, version: "1.9.0" } };
+                return { data: { reloading: true, version: chrome.runtime?.getManifest?.()?.version || "2.0.0" } };
 
             default:
                 return { error: `Unknown action '${action}'` };
@@ -461,6 +473,7 @@ async function listTabs(params = {}) {
             url: t.url,
             active: t.active,
             pinned: t.pinned,
+            groupId: t.groupId !== undefined ? t.groupId : -1,
             favIconUrl: t.favIconUrl
         }))
     };
@@ -470,58 +483,212 @@ async function getActiveTab() {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab) {
         const [anyActive] = await chrome.tabs.query({ active: true });
+        if (anyActive) lastAgentTabId = anyActive.id;
         return { data: anyActive || null };
     }
+    lastAgentTabId = tab.id;
     return { data: tab };
+}
+
+async function resolveTargetTab(params = {}, preferActive = false) {
+    const candidate = params.tabId !== undefined && params.tabId !== null
+        ? params.tabId
+        : (params.id !== undefined && params.id !== null ? params.id : null);
+
+    if (candidate !== null) {
+        const id = parseInt(candidate, 10);
+        if (!isNaN(id)) {
+            try {
+                await chrome.tabs.get(id);
+                lastAgentTabId = id;
+                return id;
+            } catch (_) {
+                throw new Error(`Target tab ${id} no longer exists`);
+            }
+        }
+    }
+
+    if (!preferActive && lastAgentTabId !== null) {
+        try {
+            await chrome.tabs.get(lastAgentTabId);
+            return lastAgentTabId;
+        } catch (_) {
+            lastAgentTabId = null;
+        }
+    }
+
+    const activeRes = await getActiveTab();
+    return activeRes?.data?.id || null;
+}
+
+async function notifyTabStatus(tabId, text, autoHideMs = 3000) {
+    if (!tabId || typeof chrome === "undefined") return;
+    try {
+        if (chrome.scripting?.executeScript) {
+            await chrome.scripting.executeScript({
+                target: { tabId },
+                func: (statusText, hideMs) => {
+                    window.dispatchEvent(new CustomEvent("__antigravity_status_pill", {
+                        detail: { text: statusText, autoHideMs: hideMs }
+                    }));
+                },
+                args: [text, autoHideMs]
+            });
+        }
+    } catch (_) {}
+}
+
+async function groupTabs(params = {}) {
+    if (!chrome.tabGroups || !chrome.tabs?.group) {
+        return { data: { warning: "Tab groups API is not supported in this browser context", tabIds: [] } };
+    }
+
+    let tabIds = [];
+    if (Array.isArray(params.tabIds) && params.tabIds.length > 0) {
+        tabIds = params.tabIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+    } else if (params.tabId !== undefined && params.tabId !== null) {
+        tabIds = [parseInt(params.tabId, 10)];
+    } else {
+        const targetId = await resolveTargetTab(params);
+        if (targetId) tabIds = [targetId];
+    }
+
+    if (tabIds.length === 0) {
+        throw new Error("No valid tabId specified or found to group");
+    }
+
+    const title = params.title || "Antigravity";
+    const color = params.color || "purple";
+    const collapsed = Boolean(params.collapsed);
+
+    let windowId = null;
+    try {
+        const firstTab = await chrome.tabs.get(tabIds[0]);
+        windowId = firstTab?.windowId;
+    } catch (_) {}
+
+    let groupId = null;
+    if (windowId && chrome.tabGroups.query) {
+        try {
+            const existingGroups = await chrome.tabGroups.query({ windowId });
+            const existing = existingGroups.find(g => g.title === title);
+            if (existing) {
+                groupId = existing.id;
+            }
+        } catch (_) {}
+    }
+
+    if (groupId !== null) {
+        groupId = await chrome.tabs.group({ tabIds, groupId });
+    } else {
+        groupId = await chrome.tabs.group({ tabIds });
+    }
+
+    let updatedGroup = { id: groupId, title, color, collapsed };
+    if (chrome.tabGroups.update) {
+        try {
+            updatedGroup = await chrome.tabGroups.update(groupId, {
+                title,
+                color,
+                collapsed
+            });
+        } catch (_) {}
+    }
+
+    return {
+        data: {
+            groupId: updatedGroup.id || groupId,
+            title: updatedGroup.title || title,
+            color: updatedGroup.color || color,
+            collapsed: updatedGroup.collapsed !== undefined ? updatedGroup.collapsed : collapsed,
+            tabIds
+        }
+    };
 }
 
 async function selectTab(params) {
     const tabId = parseInt(params.tabId || params.id);
     if (!tabId) throw new Error("Missing tabId");
 
+    lastAgentTabId = tabId;
     const tab = await chrome.tabs.update(tabId, { active: true });
     if (tab?.windowId && chrome.windows?.update) {
         await chrome.windows.update(tab.windowId, { focused: true });
     }
+    notifyTabStatus(tabId, "Au premier plan", 2000);
     return { data: { success: true, tab } };
 }
 
 async function createTab(params) {
     const url = params.url || "about:blank";
+    let active = false;
+    if (params.active === true) {
+        active = true;
+    } else if (params.background === false) {
+        active = true;
+    }
+
     try {
-        const tab = await chrome.tabs.create({ url, active: params.active !== false });
-        return { data: tab };
+        const tab = await chrome.tabs.create({ url, active });
+        lastAgentTabId = tab.id;
+        let assignedGroupId = tab.groupId !== undefined ? tab.groupId : -1;
+
+        const groupParam = params.group !== undefined ? params.group : "Antigravity";
+        if (groupParam && chrome.tabGroups && chrome.tabs?.group) {
+            try {
+                const groupTitle = typeof groupParam === "string" ? groupParam : "Antigravity";
+                const grpRes = await groupTabs({
+                    tabIds: [tab.id],
+                    title: groupTitle,
+                    color: params.groupColor || "purple",
+                    collapsed: Boolean(params.collapsed)
+                });
+                if (grpRes?.data?.groupId) {
+                    assignedGroupId = grpRes.data.groupId;
+                }
+            } catch (grpErr) {
+                console.log("[Antigravity] Auto-group notice:", grpErr.message);
+            }
+        }
+
+        notifyTabStatus(tab.id, "Onglet créé", 2500);
+        return { data: { ...tab, groupId: assignedGroupId } };
     } catch(e) {
-        const win = await chrome.windows.create({ url, focused: true });
-        return { data: win.tabs?.[0] || { id: win.id, url } };
+        const win = await chrome.windows.create({ url, focused: active });
+        const createdTab = win.tabs?.[0] || { id: win.id, url, active };
+        if (createdTab.id) lastAgentTabId = createdTab.id;
+        return { data: createdTab };
     }
 }
 
 async function closeTab(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (params.id ? parseInt(params.id) : (await getActiveTab()).data?.id);
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("Missing tabId and no active tab found to close");
     await chrome.tabs.remove(tabId);
+    if (lastAgentTabId === tabId) lastAgentTabId = null;
     return { data: { success: true, closedTabId: tabId } };
 }
 
 async function navigateTab(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab to navigate");
     if (!params.url) throw new Error("Missing url parameter");
 
     const updatedTab = await chrome.tabs.update(tabId, { url: params.url });
+    notifyTabStatus(tabId, `Navigation: ${params.url.slice(0, 30)}...`, 2500);
     return { data: updatedTab };
 }
 
 async function reloadTab(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     await chrome.tabs.reload(tabId, { bypassCache: params.bypassCache || false });
+    notifyTabStatus(tabId, "Rechargement", 2000);
     return { data: { success: true } };
 }
 
 async function evaluateScript(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     const code = params.code || params.script || params.expression;
     if (!code) throw new Error("Missing code/expression to evaluate");
@@ -541,7 +708,7 @@ async function evaluateScript(params) {
 }
 
 async function getAccessibilityTree(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const target = await ensureDebugger(tabId);
@@ -564,13 +731,13 @@ async function getAccessibilityTree(params = {}) {
 }
 
 async function getConsoleLogs(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     return { data: tabConsoleLogs.get(tabId) || [] };
 }
 
 async function getPageContent(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     return await evaluateScript({
@@ -617,7 +784,7 @@ async function getPageContent(params = {}) {
 }
 
 async function hoverElement(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const sel = JSON.stringify(params.selector || null);
@@ -716,7 +883,7 @@ async function hoverElement(params) {
 }
 
 async function clickElement(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     if (params.mark !== undefined && params.mark !== null) {
@@ -834,7 +1001,7 @@ async function clickElement(params) {
 }
 
 async function fillElement(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     const sel = JSON.stringify(params.selector || (params.mark !== undefined ? `#${params.mark}` : null));
     const val = JSON.stringify(params.value !== undefined ? String(params.value) : (params.text || ""));
@@ -926,7 +1093,7 @@ async function fillElement(params) {
  * Human-like key by key typing using CDP Input.dispatchKeyEvent
  */
 async function typeKeys(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     const target = await ensureDebugger(tabId);
     const text = params.text || "";
@@ -946,7 +1113,7 @@ async function typeKeys(params) {
 }
 
 async function scrollPage(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const sign = params.direction === "up" ? -1 : 1;
@@ -963,7 +1130,7 @@ async function scrollPage(params = {}) {
 }
 
 async function takeScreenshot(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab to capture");
 
     const target = await ensureDebugger(tabId);
@@ -1027,7 +1194,7 @@ async function takeScreenshot(params = {}) {
  * Headless PDF Generation directly via CDP Page.printToPDF
  */
 async function printToPdf(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab to print");
 
     const target = await ensureDebugger(tabId);
@@ -1044,7 +1211,7 @@ async function printToPdf(params = {}) {
 }
 
 async function handleJsDialog(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     const target = await ensureDebugger(tabId);
     await chrome.debugger.sendCommand(target, "Page.handleJavaScriptDialog", {
@@ -1055,7 +1222,7 @@ async function handleJsDialog(params = {}) {
 }
 
 async function sendCdpCommand(params) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab for CDP command");
     const target = await ensureDebugger(tabId);
     const result = await chrome.debugger.sendCommand(target, params.method, params.commandParams || {});
@@ -1070,7 +1237,7 @@ async function sendCdpCommand(params) {
  * Intercept and upload files directly to inputs or upload dropzones via CDP
  */
 async function uploadFiles(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab to upload files");
     if (!params.files || !Array.isArray(params.files) || params.files.length === 0) {
         throw new Error("Missing 'files' parameter (array of absolute file paths)");
@@ -1127,7 +1294,7 @@ async function uploadFiles(params = {}) {
  * Renders numbered neon badges on all interactive elements, captures high-res screenshot, and cleans up.
  */
 async function visionInspect(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab for vision inspect");
 
     const target = await ensureDebugger(tabId);
@@ -1262,7 +1429,7 @@ async function visionInspect(params = {}) {
  * Click directly on an element identified by its visual Set-of-Mark number
  */
 async function clickMark(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
     const mark = parseInt(params.mark || params.number || params.id);
     if (!mark) throw new Error("Missing 'mark' number to click");
@@ -1307,7 +1474,7 @@ async function clickMark(params = {}) {
  * SOTA Playwright-style semantic click (role, name, text, label)
  */
 async function semanticClick(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const role = JSON.stringify(params.role || null);
@@ -1399,7 +1566,7 @@ async function semanticClick(params = {}) {
  * SOTA Semantic form fill (label, placeholder, name)
  */
 async function semanticFill(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const label = JSON.stringify(params.label || params.placeholder || null);
@@ -1503,7 +1670,7 @@ async function semanticFill(params = {}) {
  * Detect security challenges (2FA, SMS code, Authenticator, Cloudflare Turnstile, CAPTCHA)
  */
 async function checkHandoff(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     return await evaluateScript({
@@ -1549,7 +1716,7 @@ async function getDownloadStatus(params = {}) {
  * Dispatch precise special keys (Enter, Escape, Tab, Backspace, Arrow keys, etc.) via CDP
  */
 async function pressKey(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab to press key");
 
     const key = (params.key || "Enter").trim();
@@ -1595,7 +1762,7 @@ async function pressKey(params = {}) {
  * Robust dropdown option selection (<select>)
  */
 async function selectOption(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const sel = JSON.stringify(params.selector || "select");
@@ -1666,7 +1833,7 @@ async function selectOption(params = {}) {
  * Wait for document complete and network idle
  */
 async function waitForLoad(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const timeoutMs = params.timeoutMs || params.timeout || 8000;
@@ -1694,7 +1861,7 @@ async function waitForLoad(params = {}) {
  * Wait until in-flight network requests drop to zero for at least idleMs
  */
 async function waitForNetworkIdle(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const target = await ensureDebugger(tabId);
@@ -1726,7 +1893,7 @@ async function waitForNetworkIdle(params = {}) {
  * Retrieve session and domain cookies via CDP Network.getCookies
  */
 async function getCookies(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const target = await ensureDebugger(tabId);
@@ -1767,7 +1934,7 @@ async function getCookies(params = {}) {
  * Populates window.__antigravity_som_elements so elements can be targeted directly.
  */
 async function getInteractiveMap(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const viewportOnly = params.viewportOnly !== false;
@@ -1895,7 +2062,7 @@ async function getInteractiveMap(params = {}) {
  * Dispatches CDP Input.dispatchMouseEvent steps and page-level HTML5 DragEvent fallback.
  */
 async function dragAndDrop(params = {}) {
-    let tabId = params.tabId ? parseInt(params.tabId) : (await getActiveTab()).data?.id;
+    let tabId = await resolveTargetTab(params);
     if (!tabId) throw new Error("No active tab");
 
     const selFrom = JSON.stringify(params.from_selector || params.fromSelector || null);
